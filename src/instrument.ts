@@ -18,6 +18,29 @@ import { log } from './logger.js';
 
 const INSTRUMENT_URL = 'https://api.coindcx.com/exchange/v1/derivatives/futures/data/instrument';
 
+/**
+ * CoinDCX rejects `client_order_id` longer than this with
+ * "Client order is too long (maximum is 36 characters)".
+ *
+ * This limit is NOT in the instrument payload, so it cannot be discovered the
+ * way min notional and lot size are — it only surfaces on a real submission.
+ * A dashed UUID is exactly 36 characters, so any prefix overflows it: the
+ * original `bot-${randomUUID()}` was 40 and every live order was rejected.
+ * Asserted locally now so the failure is a clear local error, not an opaque
+ * venue rejection mid-trade.
+ */
+export const MAX_CLIENT_ORDER_ID_LENGTH = 36;
+
+export function assertClientOrderId(id: string): void {
+  if (id.length === 0) throw new Error('client_order_id must not be empty');
+  if (id.length > MAX_CLIENT_ORDER_ID_LENGTH) {
+    throw new Error(
+      `client_order_id is ${id.length} characters; the venue maximum is ` +
+        `${MAX_CLIENT_ORDER_ID_LENGTH}. Shorten the prefix or strip UUID dashes.`,
+    );
+  }
+}
+
 export interface Instrument {
   pair: string;
   status: string;

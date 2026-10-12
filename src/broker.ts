@@ -12,6 +12,7 @@ import { venueRequest, type VenueRequest } from './venue.js';
 import type { CoinDCXClient, FuturesOrderResponse } from '@nemesis-oss/coindcx-sdk';
 import type { Config } from './config.js';
 import {
+  assertClientOrderId,
   checkOrder,
   fetchInstrument,
   quantizeQuantity,
@@ -21,6 +22,13 @@ import {
 import { log } from './logger.js';
 import type { PriceFeed } from './marks.js';
 import * as state from './state.js';
+
+/** Only classify create failures; HTTP 408 leaves the submission uncertain. */
+function isDefinitiveRejection(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+  return typeof status === 'number' && Number.isInteger(status) &&
+    status >= 400 && status < 500 && status !== 408;
+}
 
 export type Side = 'buy' | 'sell';
 export type PositionSide = 'long' | 'short';
@@ -286,7 +294,9 @@ export class Broker {
     const stop = quantizePrice(instrument, params.stopLoss);
     const tp = params.takeProfit === undefined ? undefined : quantizePrice(instrument, params.takeProfit);
     validateTriggers(params.side === 'buy' ? 'long' : 'short', executionPrice, stop, tp);
-    const clientOrderId = `bot-${randomUUID()}`;
+    // One-character prefix plus a 32-character UUID fits the venue's limit.
+    const clientOrderId = `b${randomUUID().replace(/-/g, '')}`;
+    assertClientOrderId(clientOrderId);
     const request = { order: {
       side: params.side, pair: this.cfg.pair, order_type: 'market_order',
       total_quantity: params.quantity, price: null, stop_price: null, time_in_force: null,
@@ -304,14 +314,17 @@ export class Broker {
     // Set this BEFORE sending: timeouts and malformed acknowledgements cannot
     // cause the next candle to submit a second entry under a new UUID.
     this.entryBlock = `submission ${clientOrderId} has not been reconciled`;
-    const raw = await this.request('POST', 'orders/create', request);
-    const orders = (Array.isArray(raw) ? raw : [raw]).map(normalizeOrder);
-    const order = orders[0];
-    if (!order || orders.some(o => o.pair !== this.cfg.pair)) throw new Error('Unexpected entry acknowledgement');
-    const entryIds = new Set(orders.map(o => o.id));
-    state.bump('entries');
-    log.info('entry submitted', { id: order.id, clientOrderId, status: order.status });
+    let createAcknowledged = false;
+    let orders: FuturesOrderResponse[] = [];
     try {
+      const raw = await this.request('POST', 'orders/create', request);
+      createAcknowledged = true;
+      orders = (Array.isArray(raw) ? raw : [raw]).map(normalizeOrder);
+      const order = orders[0];
+      if (!order || orders.some(o => o.pair !== this.cfg.pair)) throw new Error('Unexpected entry acknowledgement');
+      const entryIds = new Set(orders.map(o => o.id));
+      state.bump('entries');
+      log.info('entry submitted', { id: order.id, clientOrderId, status: order.status });
       const pos = await this.waitForPosition(p => p !== null, 'Entry fill not visible');
       if (!pos || pos.side !== (params.side === 'buy' ? 'long' : 'short')) {
         throw new Error('Entry resulted in unexpected position direction');
@@ -327,17 +340,30 @@ export class Broker {
       const finalPos = await this.getPosition();
       if (finalPos) await this.ensureProtection(finalPos, stop, tp);
       this.entryBlock = null;
+      return order;
     } catch (err) {
+      this.entryBlock =
+        `submission ${clientOrderId} failed: ${err instanceof Error ? err.message : String(err)}`;
+      // A rejection of a later read, cancellation or TP/SL request says
+      // nothing about whether the entry was submitted. Keep those latched.
+      if (!createAcknowledged && isDefinitiveRejection(err)) {
+        this.entryBlock = null;
+        log.warn('venue rejected the create request; entries re-enabled', { error: String(err) });
+        throw err;
+      }
       log.error('entry not safely protected; blocking entries and attempting exit', { error: String(err) });
       try {
         for (const submitted of orders) await this.request('POST', 'orders/cancel', { id: submitted.id });
       } catch (cancelError) {
         log.warn('entry cancellation failed', { error: String(cancelError) });
       }
-      await this.flatten('entry-protection-failed');
+      try {
+        await this.flatten('entry-protection-failed');
+      } catch (flattenError) {
+        log.warn('post-failure flatten failed', { error: String(flattenError) });
+      }
       throw err;
     }
-    return order;
   }
 
   private async waitForPosition(predicate: (p: OpenPosition | null) => boolean,

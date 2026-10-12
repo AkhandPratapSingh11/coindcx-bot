@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { CoinDCXClient } from '@nemesis-oss/coindcx-sdk';
+import { CoinDCXAPIError, CoinDCXClient } from '@nemesis-oss/coindcx-sdk';
 import { Broker } from '../src/broker.js';
 import { Engine } from '../src/engine.js';
 import { PriceFeed } from '../src/marks.js';
@@ -9,6 +9,7 @@ import { buildClient } from '../src/client.js';
 import { loadConfig, type Config } from '../src/config.js';
 import { log } from '../src/logger.js';
 import { venueRequest, type VenueRequest } from '../src/venue.js';
+import { assertClientOrderId, MAX_CLIENT_ORDER_ID_LENGTH } from '../src/instrument.js';
 
 for (const level of ['info', 'warn', 'error', 'debug'] as const) log[level] = () => {};
 const cfg: Config = { ...loadConfig(), apiKey: 'test', apiSecret: 'test-secret', mode: 'live',
@@ -28,6 +29,14 @@ function broker(request: VenueRequest, config = cfg): Broker {
   (b as any).instrument = instrument;
   return b;
 }
+
+test('client order IDs accept the venue boundary and reject empty or oversized values', () => {
+  assert.equal(MAX_CLIENT_ORDER_ID_LENGTH, 36);
+  assert.doesNotThrow(() => assertClientOrderId('a'.repeat(36)));
+  assert.throws(() => assertClientOrderId(''), /must not be empty/);
+  assert.throws(() => assertClientOrderId('a'.repeat(37)), /37 characters.*maximum is 36/);
+  assert.throws(() => assertClientOrderId('bot-00000000-0000-4000-8000-000000000000'), /40 characters/);
+});
 
 test('wire requests sign millisecond timestamp and serialize GET body without exposing credentials', async () => {
   const client = new CoinDCXClient({ apiKey: 'test', apiSecret: 'test' });
@@ -60,6 +69,8 @@ test('entry uses nested API payload and waits for a delayed fill', async () => {
   assert.equal(payload.order.take_profit_price, 110);
   assert.equal(payload.order.price, null);
   assert.equal(payload.order.notification, 'no_notification');
+  assert.equal(payload.order.client_order_id.length, 33);
+  assert.match(payload.order.client_order_id, /^b[0-9a-f]{32}$/);
   assert.equal(payload.target_quantity, undefined);
   assert.ok(reads >= 2);
 });
@@ -85,7 +96,7 @@ test('failed protection exits by position id and permanently blocks further entr
     if (path === 'positions') return created && !exited ? [position({ stop_loss_trigger: null })] : [];
     if (path === 'orders') return [];
     if (path === 'orders/create') { created = true; submissions++; return [order]; }
-    if (path === 'positions/create_tpsl') throw new Error('TP/SL rejected');
+    if (path === 'positions/create_tpsl') throw new CoinDCXAPIError('TP/SL rejected', 400, {}, 'POST', path);
     if (path === 'orders/cancel') return {};
     if (path === 'positions/exit') { assert.equal(body!.id, 'position-1'); exited = true; return {}; }
     throw new Error(path);
@@ -94,6 +105,79 @@ test('failed protection exits by position id and permanently blocks further entr
   assert.equal(exited, true);
   await assert.rejects(b.open(entry), /Entries blocked/);
   assert.equal(submissions, 1);
+});
+
+for (const status of [400, 422]) {
+  test(`HTTP ${status} create rejection permits a later entry without cleanup mutations`, async () => {
+    let submissions = 0; let created = false; const ids: string[] = [];
+    const error = new CoinDCXAPIError('create refused', status, {}, 'POST', 'orders/create');
+    const b = broker(async (_m, path, body) => {
+      if (path === 'positions') return created ? [position()] : [];
+      if (path === 'orders') return [];
+      if (path === 'orders/create') {
+        submissions++;
+        ids.push(String((body!.order as any).client_order_id));
+        if (submissions === 1) throw error;
+        created = true; return [order];
+      }
+      assert.fail(`Unexpected cleanup mutation: ${path}`);
+    });
+    await assert.rejects(b.open(entry), err => err === error);
+    assert.equal((await b.open(entry))?.id, order.id);
+    assert.equal(submissions, 2);
+    assert.notEqual(ids[0], ids[1]);
+  });
+}
+
+for (const status of [408, 500, 503]) {
+  test(`HTTP ${status} create failure keeps entries latched and records the cause`, async () => {
+    let submissions = 0;
+    const error = new CoinDCXAPIError('create outcome unknown', status, {}, 'POST', 'orders/create');
+    const b = broker(async (_m, path) => {
+      if (path === 'orders' || path === 'positions') return [];
+      if (path === 'orders/create') { submissions++; throw error; }
+      throw new Error(path);
+    });
+    await assert.rejects(b.open(entry), err => err === error);
+    await assert.rejects(b.open(entry), /Entries blocked: .*create outcome unknown/);
+    assert.equal(submissions, 1);
+  });
+}
+
+test('malformed acknowledgement stays latched and preserves the cause when cleanup also fails', async () => {
+  let submissions = 0;
+  const b = broker(async (_m, path) => {
+    if (path === 'positions') {
+      if (submissions) throw new Error('cleanup read failed');
+      return [];
+    }
+    if (path === 'orders') return [];
+    if (path === 'orders/create') { submissions++; return {}; }
+    throw new Error(path);
+  });
+  await assert.rejects(b.open(entry), /Order has no valid id or pair/);
+  await assert.rejects(b.open(entry), /Entries blocked: .*Order has no valid id or pair/);
+  assert.equal(submissions, 1);
+});
+
+test('venue response-body rejection retains its status so the broker can release the latch', async () => {
+  const client = new CoinDCXClient({ apiKey: 'test', apiSecret: 'test' });
+  const request = venueRequest(client, cfg);
+  let submissions = 0;
+  (client.futures.trading as any).axiosInstance.defaults.adapter = async (config: any) => {
+    const data = config.url.endsWith('/orders/create')
+      ? (submissions++, { status: '400', message: 'Client order is too long' }) : [];
+    return { data, status: 200, statusText: 'OK', headers: {}, config };
+  };
+  const b = broker(request);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assert.rejects(b.open(entry), err => {
+      assert.match((err as Error).message, /Client order is too long/);
+      assert.equal((err as CoinDCXAPIError).status, 400);
+      return true;
+    });
+  }
+  assert.equal(submissions, 2);
 });
 
 test('uncertain submission is not resubmitted even when positions still appear flat', async () => {

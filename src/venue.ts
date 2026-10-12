@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import type { CoinDCXClient } from '@nemesis-oss/coindcx-sdk';
+import { CoinDCXAPIError, type CoinDCXClient } from '@nemesis-oss/coindcx-sdk';
 import type { Config } from './config.js';
 
 export type VenueRequest = (method: 'GET' | 'POST', path: string,
@@ -26,9 +26,14 @@ export function venueRequest(client: CoinDCXClient, cfg: Config): VenueRequest {
     const data = response.data;
     if (data && typeof data === 'object' && !Array.isArray(data)) {
       const r = data as Record<string, unknown>;
-      if (r['success'] === false || (r['status'] !== undefined &&
-          Number.isFinite(Number(r['status'])) && Number(r['status']) >= 400)) {
-        throw new Error(`Venue rejected ${path}: ${String(r['message'] ?? r['error'] ?? r['status'])}`);
+      const status = Number(r['status']);
+      if (r['success'] === false || (Number.isFinite(status) && status >= 400)) {
+        const message = `Venue rejected ${path}: ${String(r['message'] ?? r['error'] ?? r['status'])}`;
+        if (Number.isInteger(status) && status >= 400 && status <= 599) {
+          throw new CoinDCXAPIError(message, status, data, method, path);
+        }
+        // A failure without an explicit error status cannot prove rejection.
+        throw new Error(message);
       }
     }
     return data;
