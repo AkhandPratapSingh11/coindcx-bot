@@ -158,6 +158,7 @@ async function main(): Promise<void> {
   // issuing position/wallet requests on every browser poll.
   const dashboard = startDashboard({
     cfg,
+    entryBlock: () => broker.getEntryBlock(),
     refresh: async () => {
       await broker.getPosition();
       await broker.getEquity();

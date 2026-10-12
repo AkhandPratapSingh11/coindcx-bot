@@ -43,6 +43,7 @@ export interface DashboardOptions {
   cfg: Config;
   /** Pulls fresh position + equity. Called at most once per throttle window. */
   refresh: () => Promise<void>;
+  entryBlock: () => string | null;
 }
 
 export function startDashboard(opts: DashboardOptions): Server | null {
@@ -83,7 +84,10 @@ export function startDashboard(opts: DashboardOptions): Server | null {
           ...snap,
           now: Date.now(),
           nextCloseAt: state.nextCloseAt(),
+          entryBlock: opts.entryBlock(),
           config: {
+            quoteCurrency: cfg.quoteCurrency,
+            marginType: cfg.marginType,
             riskPercent: cfg.riskPercent,
             stopLossPct: cfg.stopLossPct,
             takeProfitPct: cfg.takeProfitPct ?? null,

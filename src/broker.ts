@@ -115,6 +115,10 @@ export class Broker {
   private readonly request: VenueRequest;
   private entryBlock: string | null = null;
 
+  getEntryBlock(): string | null {
+    return this.entryBlock;
+  }
+
   constructor(
     private readonly client: CoinDCXClient,
     private readonly cfg: Config,

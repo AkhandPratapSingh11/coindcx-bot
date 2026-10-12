@@ -1,301 +1,70 @@
-/**
- * The dashboard page, as a single inlined string. Kept as one file with no
- * assets so the bot has nothing to serve but itself.
- */
-
+/** Self-contained monitoring page; no external assets or trading controls. */
 export const page = `<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>coindcx-bot</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%93%88%3C/text%3E%3C/svg%3E">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoinDCX · Bot overview</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2325b89b'/%3E%3Cpath d='M7 22l6-9 5 4 7-10' fill='none' stroke='white' stroke-width='3'/%3E%3C/svg%3E">
 <style>
-  :root {
-    --bg: #fbfbfa;
-    --panel: #ffffff;
-    --border: #e5e3df;
-    --text: #1a1a18;
-    --muted: #76736c;
-    --accent: #3a6ea5;
-    --long: #1f7a4d;
-    --short: #b3412c;
-    --flat: #76736c;
-    --warn: #9a6700;
-    --error: #b3412c;
-    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg: #14140f;
-      --panel: #1c1c17;
-      --border: #2e2e27;
-      --text: #eceae4;
-      --muted: #9a968d;
-      --accent: #7aa7d4;
-      --long: #4cb782;
-      --short: #e8795f;
-      --flat: #9a968d;
-      --warn: #d9a441;
-      --error: #e8795f;
-    }
-  }
-  :root[data-theme="dark"] {
-    --bg: #14140f; --panel: #1c1c17; --border: #2e2e27; --text: #eceae4;
-    --muted: #9a968d; --accent: #7aa7d4; --long: #4cb782; --short: #e8795f;
-    --flat: #9a968d; --warn: #d9a441; --error: #e8795f;
-  }
-
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 0 16px 48px;
-    background: var(--bg); color: var(--text);
-    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }
-  .wrap { max-width: 1040px; margin: 0 auto; }
-
-  header {
-    display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline;
-    padding: 24px 0 16px; border-bottom: 1px solid var(--border); margin-bottom: 20px;
-  }
-  h1 { font-size: 19px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-  h1 .pair { font-family: var(--mono); color: var(--accent); }
-  .badges { display: flex; gap: 6px; flex-wrap: wrap; }
-  .badge {
-    font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
-    padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); color: var(--muted);
-  }
-  .badge.paper { color: var(--accent); border-color: currentColor; }
-  .badge.live { color: var(--error); border-color: currentColor; }
-  .badge.dry { color: var(--warn); border-color: currentColor; }
-  .spacer { flex: 1; }
-  .conn { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--flat); }
-  .dot.on { background: var(--long); }
-  .dot.off { background: var(--error); }
-
-  .grid {
-    display: grid; gap: 12px; margin-bottom: 20px;
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  }
-  .card {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px;
-  }
-  .card .label {
-    font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
-    color: var(--muted); margin-bottom: 7px;
-  }
-  .card .value { font-family: var(--mono); font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
-  .card .sub { font-size: 12px; color: var(--muted); margin-top: 4px; font-family: var(--mono); }
-  .long { color: var(--long); } .short { color: var(--short); } .flat { color: var(--flat); }
-  .pos { color: var(--long); } .neg { color: var(--short); }
-
-  section { margin-bottom: 20px; }
-  h2 {
-    font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
-    color: var(--muted); margin: 0 0 10px;
-  }
-
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .kv { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .kv td { padding: 9px 16px; border-bottom: 1px solid var(--border); }
-  .kv tr:last-child td { border-bottom: none; }
-  .kv td:first-child { color: var(--muted); width: 42%; }
-  .kv td:last-child { font-family: var(--mono); text-align: right; }
-
-  .logs { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .logs table { font-family: var(--mono); font-size: 12px; }
-  .logs td { padding: 6px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  .logs tr:last-child td { border-bottom: none; }
-  .logs .t { color: var(--muted); white-space: nowrap; width: 1%; }
-  .logs .l { width: 1%; white-space: nowrap; font-weight: 600; font-size: 11px; }
-  .logs .l.info { color: var(--accent); }
-  .logs .l.warn { color: var(--warn); }
-  .logs .l.error { color: var(--error); }
-  .logs .l.debug { color: var(--muted); }
-  .logs .m { word-break: break-word; }
-  .logs .f { color: var(--muted); }
-
-  .empty { color: var(--muted); font-size: 13px; padding: 16px; text-align: center; }
-  footer { color: var(--muted); font-size: 12px; text-align: center; padding-top: 8px; }
-  @media (max-width: 560px) {
-    .card .value { font-size: 19px; }
-    .kv td { padding: 8px 12px; }
-  }
+:root{color-scheme:dark;--bg:#10151c;--panel:#181f29;--raised:#202936;--line:#2c3745;--text:#edf2f7;--muted:#a0afc0;--green:#63d6b5;--amber:#f2c66d;--red:#ff929b;--blue:#8bbcff;--mono:ui-monospace,SFMono-Regular,Consolas,monospace}
+:root[data-theme=light]{color-scheme:light;--bg:#f3f6f8;--panel:#fff;--raised:#edf2f6;--line:#d9e2ea;--text:#172635;--muted:#586c80;--green:#087b60;--amber:#946209;--red:#bc3444;--blue:#2864ad}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 system-ui,-apple-system,sans-serif}button,input{font:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--green);outline-offset:4px}.wrap{max-width:1280px;margin:auto;padding:0 32px 32px}header{display:flex;align-items:center;gap:14px;padding:26px 0;border-bottom:1px solid var(--line)}.brand-icon{height:36px;width:36px;display:grid;place-items:center;background:var(--green);color:var(--bg);border-radius:10px;font-size:25px;font-weight:700}.brand{font-size:17px;font-weight:700;letter-spacing:-.4px}.eyebrow,.label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:1.2px;font-weight:650}.spacer{flex:1}.button{border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);padding:7px 12px}.feed{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:12px}.dot{width:7px;height:7px;border-radius:50%;background:var(--green)}.dot.off{background:var(--red)}.heading{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding:28px 0 20px}h1{font-size:30px;letter-spacing:-1px;margin:2px 0 3px;line-height:1.25}.muted{color:var(--muted)}.badges{display:flex;gap:8px;flex-wrap:wrap}.badge{border:1px solid var(--line);padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;background:var(--panel)}.good,.long{color:var(--green)}.warn{color:var(--amber)}.bad,.short{color:var(--red)}.blue{color:var(--blue)}.banner{display:flex;gap:16px;align-items:center;border:1px solid var(--line);border-left:3px solid var(--green);padding:18px 20px;border-radius:10px;background:var(--panel);margin-bottom:18px}.banner.warn{border-left-color:var(--amber)}.banner.bad{border-left-color:var(--red)}.banner strong{display:block;font-size:17px;color:var(--text);margin-bottom:3px}.banner p{margin:0;color:var(--muted);overflow-wrap:anywhere}.banner-icon{font-size:22px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}.card,.panel{border:1px solid var(--line);border-radius:12px;background:var(--panel)}.card{padding:19px 20px}.metric{font-size:28px;font-weight:650;letter-spacing:-1px;margin:8px 0 3px;font-variant-numeric:tabular-nums}.metric small{font-size:13px;color:var(--muted);letter-spacing:0;font-weight:400}.sub{font-size:12px;color:var(--muted)}.main-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:18px;margin-bottom:22px}.panel{padding:22px;min-width:0}h2{margin:0;font-size:16px;font-weight:600;letter-spacing:-.3px}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:20px}.intent{display:flex;align-items:center;gap:16px;margin:5px 0 20px}.intent-item{flex:1;background:var(--raised);border-radius:8px;padding:14px}.intent-value{font-size:23px;font-weight:600;margin-top:4px;text-transform:capitalize}.arrow{color:var(--muted);font-size:22px}.kv{display:grid;grid-template-columns:1fr auto;gap:11px 20px}.kv dt{color:var(--muted)}.kv dd{margin:0;text-align:right;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.divider{height:1px;background:var(--line);margin:20px 0}.empty-position{text-align:center;padding:27px 12px 30px}.empty-icon{width:42px;height:42px;border:1px solid var(--line);border-radius:50%;display:grid;place-items:center;margin:0 auto 10px;color:var(--muted);font-size:22px}.empty-position strong{display:block;font-size:19px;margin-bottom:6px}.position-top{display:flex;align-items:center;justify-content:space-between;padding-bottom:18px}.pnl{font-size:26px;font-weight:650;letter-spacing:-.6px}.position-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:18px}.position-grid b{display:block;font-family:var(--mono);margin-top:4px;font-size:16px;font-weight:500}.protection{padding:14px;background:var(--raised);border-radius:8px}.protection strong{font-size:13px}.protection .kv{margin-bottom:0;font-size:13px}.progress{height:5px;border-radius:5px;background:var(--raised);overflow:hidden;margin:16px 0 10px}.progress span{display:block;height:100%;background:var(--green);transition:width .8s}.session{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.session b{display:block;font-size:22px;font-variant-numeric:tabular-nums;margin-top:4px}.activity.panel{padding:0;overflow:hidden}.activity .panel-head{padding:20px 22px 0}.tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.filters{display:flex;gap:4px}.filter{background:none;border:0;border-radius:6px;padding:5px 10px;color:var(--muted);font-size:12px}.filter[aria-pressed=true]{background:var(--raised);color:var(--text)}input{min-width:0;width:180px;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:6px 10px;color:var(--text);font-size:12px}.event{display:grid;grid-template-columns:72px 62px minmax(0,1fr);gap:16px;padding:13px 22px;border-top:1px solid var(--line);align-items:start}.event time{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}.event-level{font-size:10px;text-transform:uppercase;letter-spacing:.8px;font-weight:650;align-self:start;padding-top:2px}.event details{margin-top:4px}.event summary{cursor:pointer;font-size:12px;color:var(--muted)}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);border:1px solid var(--line);padding:12px;border-radius:6px;color:var(--muted);font:12px/1.6 var(--mono);max-height:260px;overflow:auto}.empty{padding:30px;text-align:center;color:var(--muted)}#logs{max-height:490px;overflow:auto;scrollbar-gutter:stable}.activity-foot{padding:12px 22px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}footer{display:flex;justify-content:space-between;gap:12px;padding-top:20px;font-size:12px;color:var(--muted)}.hidden{display:none}#last-error{font-size:12px;color:var(--muted);margin:14px 0 0;overflow-wrap:anywhere}#last-error summary{cursor:pointer}@media(max-width:900px){.wrap{padding:0 20px 24px}.metrics{grid-template-columns:repeat(2,1fr)}.main-grid{grid-template-columns:1fr}.heading{align-items:start}.activity .panel-head{align-items:start;flex-direction:column}}@media(max-width:540px){.wrap{padding:0 14px 20px}header{padding:18px 0}.feed{display:none}h1{font-size:26px}.heading{flex-direction:column;gap:10px}.metrics{gap:10px}.card{padding:14px}.metric{font-size:23px}.panel{padding:17px}.banner{padding:15px}.banner-icon{display:none}.event{grid-template-columns:58px minmax(0,1fr);gap:10px;padding:12px 17px}.event-level{display:none}.tools{width:100%}input{flex:1;width:120px}.session{gap:7px}.session .label{font-size:9px;letter-spacing:.4px}footer{flex-direction:column}}
 </style>
 </head>
-<body>
-<div class="wrap">
-  <header>
-    <h1>coindcx-bot <span class="pair" id="pair">—</span></h1>
-    <div class="badges" id="badges"></div>
-    <div class="spacer"></div>
-    <div class="conn"><span class="dot" id="dot"></span><span id="conn">connecting…</span></div>
-  </header>
-
-  <div class="grid" id="cards"></div>
-
-  <section>
-    <h2>Position</h2>
-    <div id="position"></div>
-  </section>
-
-  <section>
-    <h2>Configuration</h2>
-    <table class="kv"><tbody id="config"></tbody></table>
-  </section>
-
-  <section>
-    <h2>Activity</h2>
-    <div class="logs" id="logs"></div>
-  </section>
-
-  <footer>Polls every 2s · read-only · <span id="uptime"></span></footer>
+<body><div class="wrap">
+<header><div class="brand-icon" aria-hidden="true">↗</div><div><div class="brand">CoinDCX <span class="muted">/ Bot</span></div><div class="eyebrow">Trading overview</div></div><div class="spacer"></div><div class="feed"><span class="dot" id="dot"></span><span id="connection">Connecting</span></div><button class="button" id="theme" aria-label="Switch color theme">Light theme</button></header>
+<div class="heading"><div><div class="eyebrow">Futures trading</div><h1 id="pair">Loading market…</h1><div class="muted" id="strategy">Waiting for bot status</div></div><div class="badges" id="badges"></div></div>
+<div class="banner" id="banner" role="status" aria-live="polite"><span class="banner-icon" id="banner-icon" aria-hidden="true">◉</span><div><strong id="status-title">Connecting to the bot</strong><p id="status-detail">Fetching the latest market and position data.</p></div></div>
+<div class="metrics" id="metrics"></div>
+<div class="main-grid"><section class="panel"><div class="panel-head"><h2>Strategy & execution</h2><span class="badge" id="alignment">Waiting</span></div><div class="intent" id="intent"></div><dl class="kv" id="strategy-details"></dl><div class="progress"><span id="candle-progress" style="width:0%"></span></div><div class="sub" id="candle-detail">Waiting for candle data</div><div class="divider"></div><div class="session" id="session"></div><details id="last-error" class="hidden"><summary id="error-summary"></summary><p id="error-detail"></p></details></section>
+<section class="panel"><div class="panel-head"><h2>Open position</h2><span class="badge" id="position-badge">Waiting</span></div><div id="position"></div><div class="divider"></div><div class="panel-head"><h2>Risk limits</h2><span class="sub">Per entry</span></div><dl class="kv" id="risk"></dl></section></div>
+<section class="activity panel"><div class="panel-head"><div><h2>Recent activity</h2><div class="sub">Newest first · expand an event for details</div></div><div class="tools"><div class="filters" aria-label="Activity filter"><button class="filter" data-filter="all" aria-pressed="true">All</button><button class="filter" data-filter="trades" aria-pressed="false">Trades</button><button class="filter" data-filter="issues" aria-pressed="false">Issues</button></div><input id="search" type="search" aria-label="Search activity" placeholder="Search activity"></div></div><div id="logs"><div class="empty">Waiting for activity…</div></div><div class="activity-foot" id="activity-count"></div></section>
+<footer><span>Read-only monitoring · updates every 2 seconds</span><span id="updated">Waiting for first update</span></footer>
 </div>
-
 <script>
-const $ = (id) => document.getElementById(id);
-let failures = 0;
-
-const fmt = (n, dp = 2) =>
-  n === null || n === undefined || !isFinite(n)
-    ? '—'
-    : Number(n).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp });
-
-function duration(ms) {
-  if (ms === null || ms === undefined || !isFinite(ms)) return '—';
-  const neg = ms < 0;
-  let s = Math.floor(Math.abs(ms) / 1000);
-  const h = Math.floor(s / 3600); s -= h * 3600;
-  const m = Math.floor(s / 60); s -= m * 60;
-  const out = h > 0 ? h + 'h ' + m + 'm' : m > 0 ? m + 'm ' + s + 's' : s + 's';
-  return neg ? 'overdue by ' + out : out;
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = (n, dp=2) => n === null || n === undefined || !Number.isFinite(Number(n)) ? '—' : Number(n).toLocaleString('en-US',{minimumFractionDigits:dp,maximumFractionDigits:dp});
+const clock = ts => ts ? new Date(ts).toLocaleTimeString([], {hour12:false}) : '—';
+const pct = n => n == null ? '—' : fmt(n * 100) + '%';
+function duration(ms){if(ms == null || !Number.isFinite(ms))return '—';let s=Math.floor(Math.max(0,ms)/1000);const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h ? h+'h '+m+'m' : m ? m+'m '+s%60+'s' : s+'s';}
+const sideClass = s => s === 'long' ? 'good' : s === 'short' ? 'bad' : 'muted';
+const rows = values => values.map(([k,v])=>'<dt>'+esc(k)+'</dt><dd>'+v+'</dd>').join('');
+const metric = (label,value,sub,cls='') => '<div class="card"><div class="label">'+esc(label)+'</div><div class="metric '+cls+'">'+value+'</div><div class="sub">'+esc(sub)+'</div></div>';
+let snapshot=null,receivedAt=0,filter='all',lastLogs='';
+function estimatedNow(){return snapshot ? snapshot.now + Date.now() - receivedAt : Date.now();}
+function status(title,detail,tone='good'){ $('banner').className='banner '+tone;$('status-title').textContent=title;$('status-detail').textContent=detail;$('banner-icon').textContent=tone==='bad'?'!':tone==='warn'?'◷':'◉';}
+function render(d){
+ const cf=d.config||{},p=d.position,c=d.counters||{},quote=d.quote,mark=quote?(quote.bid+quote.ask)/2:null,unit=cf.quoteCurrency||'USDT';
+ $('pair').textContent=(d.pair||'Unknown market').replace(/^B-/,'').replace('_',' / ');
+ $('strategy').textContent=(d.strategy||'Strategy warming up')+' · '+(d.interval||'—')+' candles · '+(d.leverage||'—')+'× '+(cf.marginType||'')+' margin';
+ const mode=d.dryRun?'Dry run':d.mode==='paper'?'Paper trading':'Live trading';
+ $('badges').innerHTML='<span class="badge '+(d.dryRun?'warn':d.mode==='live'?'bad':'blue')+'">'+esc(mode)+'</span><span class="badge">'+(d.dryRun?'Orders are simulated':d.mode==='live'?'Real orders enabled':'Simulated balance')+'</span>';
+ const actual=p?p.side:'flat',aligned=d.target===actual,blocked=Boolean(d.entryBlock);
+ if(blocked)status('Entries blocked',d.entryBlock,'bad');
+ else if(d.quoteStale||!quote)status('Waiting for a fresh market quote','New entries require a fresh price. Last quote: '+clock(d.quoteAt)+'.','warn');
+ else if(p && !(p.stopLoss>0))status('Position stop not visible','The latest position response has no venue stop. Check the activity feed for protection attempts.','bad');
+ else if(d.dryRun)status('Dry run · real orders are disabled','Strategy wants '+(d.target||'an initial signal')+'. '+(p?'An existing '+p.side+' position is visible; order actions are only logged.':'The account is flat. Entry payloads are logged without sending orders.'),'warn');
+ else if(!d.target)status('Waiting for the first strategy target','The bot is connected and collecting candle data.','warn');
+ else if(aligned)status(p?'Holding '+p.side+' · strategy is aligned':'Standing by · strategy wants flat',p?'The position matches the latest strategy target. Monitoring venue protection and the next candle.':'No position is open. Waiting for a strategy signal.');
+ else status('Strategy wants '+d.target+' · account is '+actual,'The target and position differ. Check recent activity for submission progress or a rejected action.','warn');
+ $('metrics').innerHTML=metric('Market midpoint',fmt(mark)+' <small>'+esc(unit)+'</small>',quote?'Bid '+fmt(quote.bid)+' / Ask '+fmt(quote.ask):'No quote available',d.quoteStale?'warn':'')+metric('Available equity',fmt(d.equity)+' <small>'+esc(unit)+'</small>',d.equityAt?'Wallet updated '+clock(d.equityAt):'Waiting for wallet')+metric('Unrealized P&L',p&&p.unrealizedPnl!=null?(p.unrealizedPnl>=0?'+':'')+fmt(p.unrealizedPnl)+' <small>'+esc(unit)+'</small>':'—',p?'Venue-reported position P&L':'No open position',p&&p.unrealizedPnl!=null?(p.unrealizedPnl>=0?'good':'bad'):'muted')+metric('Next candle close','<span id="countdown">—</span>',d.nextCloseAt?'At '+clock(d.nextCloseAt)+' · '+d.interval:'Waiting for first closed candle');
+ $('alignment').textContent=blocked?'Blocked':d.dryRun?'Simulation':aligned?'Aligned':'Waiting';$('alignment').className='badge '+(blocked?'bad':aligned?'good':'warn');
+ $('intent').innerHTML='<div class="intent-item"><div class="label">Strategy target</div><div class="intent-value '+sideClass(d.target)+'">'+esc(d.target||'Waiting')+'</div></div><span class="arrow" aria-hidden="true">→</span><div class="intent-item"><div class="label">Actual position</div><div class="intent-value '+sideClass(actual)+'">'+esc(actual)+'</div></div>';
+ $('strategy-details').innerHTML=rows([['Market data',d.wsConnected?'<span class="good">WebSocket connected</span>':'<span class="warn">REST polling fallback</span>'],['Quote freshness',d.quoteStale?'<span class="warn">Stale · '+clock(d.quoteAt)+'</span>':'Updated '+clock(d.quoteAt)],['Last closed candle',d.lastCandle?fmt(d.lastCandle.close)+' · '+clock(d.lastCandle.openTime+d.intervalMs):'Waiting'],['Last target change',d.lastSignalChange?esc(d.lastSignalChange.from||'none')+' → '+esc(d.lastSignalChange.to)+' · '+clock(d.lastSignalChange.at):'No change this session']]);
+ $('session').innerHTML=[['Candles',c.candles],['Entries',c.entries],['Exits',c.exits],['Errors',c.errors]].map(([k,v])=>'<div><span class="label">'+k+'</span><b class="'+(k==='Errors'&&v?'bad':'')+'">'+fmt(v||0,0)+'</b></div>').join('');
+ $('last-error').classList.toggle('hidden',!d.lastError);if(d.lastError){$('error-summary').textContent='Last recorded error · '+clock(d.lastError.at);$('error-detail').textContent=d.lastError.msg;}
+ $('position-badge').textContent=p?p.side.toUpperCase():'FLAT';$('position-badge').className='badge '+sideClass(actual);
+ if(!p){$('position').innerHTML='<div class="empty-position"><div class="empty-icon" aria-hidden="true">—</div><strong>No open position</strong><div class="muted">'+(d.dryRun?'Dry run is active. Real orders are disabled.':'The account has no exposure in this market.')+'</div><div class="sub">Last checked '+clock(d.positionAt)+'</div></div>';}
+ else{$('position').innerHTML='<div class="position-grid"><div><div class="label">Position size</div><b>'+fmt(p.size,4)+'</b></div><div><div class="label">Entry price</div><b>'+fmt(p.entryPrice)+'</b></div><div><div class="label">Mark price</div><b>'+fmt(p.markPrice??mark)+'</b></div><div><div class="label">Leverage</div><b>'+fmt(p.leverage??d.leverage,0)+'×</b></div></div><div class="protection"><strong class="'+(p.stopLoss>0?'good':'bad')+'">'+(p.stopLoss>0?'Venue stop is present':'Venue stop is not visible')+'</strong><dl class="kv">'+rows([['Stop loss',fmt(p.stopLoss)],['Take profit',p.takeProfit>0?fmt(p.takeProfit):'Not set'],['Position updated',clock(d.positionAt)]])+'</dl></div>';}
+ $('risk').innerHTML=rows([['Risk per trade',fmt(cf.riskPercent)+'%'],['Stop / take profit',pct(cf.stopLossPct)+' / '+(cf.takeProfitPct==null?'Not set':pct(cf.takeProfitPct))],['Maximum quantity',cf.maxOrderQuantity==null?'Not set':fmt(cf.maxOrderQuantity,4)],['Maximum notional',cf.maxOrderNotional==null?'Not set':fmt(cf.maxOrderNotional)+' '+esc(unit)],['Venue minimum notional',d.instrument?fmt(d.instrument.minNotional)+' '+esc(unit):'Waiting']]);
+ $('dot').className='dot';$('connection').textContent='Bot connected';renderLogs();renderTime();
 }
-
-const clock = (ts) =>
-  ts ? new Date(ts).toLocaleTimeString('en-US', { hour12: false }) : '—';
-
-function card(label, value, cls, sub) {
-  return '<div class="card"><div class="label">' + label + '</div>' +
-    '<div class="value ' + (cls || '') + '">' + value + '</div>' +
-    (sub ? '<div class="sub">' + sub + '</div>' : '') + '</div>';
-}
-
-function render(d) {
-  $('pair').textContent = d.pair || '—';
-
-  const badges = [];
-  badges.push('<span class="badge ' + (d.mode === 'live' ? 'live' : 'paper') + '">' + d.mode + '</span>');
-  if (d.dryRun) badges.push('<span class="badge dry">dry run</span>');
-  badges.push('<span class="badge">' + d.interval + '</span>');
-  badges.push('<span class="badge">' + d.leverage + 'x</span>');
-  $('badges').innerHTML = badges.join('');
-
-  const t = d.target || 'none';
-  const pos = d.position;
-  const mark = d.quote ? (d.quote.bid + d.quote.ask) / 2 : null;
-
-  const cards = [];
-  cards.push(card('Target', t, t === 'long' ? 'long' : t === 'short' ? 'short' : 'flat',
-    d.strategy));
-  cards.push(card('Actual', pos ? pos.side : 'flat',
-    pos ? (pos.side === 'long' ? 'long' : 'short') : 'flat',
-    pos ? fmt(pos.size, 4) + ' @ ' + fmt(pos.entryPrice) : 'no exposure'));
-  cards.push(card('Mark', fmt(mark), d.quoteStale ? 'short' : '',
-    d.quoteStale ? 'STALE · ' + clock(d.quoteAt) : 'updated ' + clock(d.quoteAt)));
-  cards.push(card('Equity', fmt(d.equity), '', 'USDT · ' + clock(d.equityAt)));
-  cards.push(card('Next close', duration(d.nextCloseAt ? d.nextCloseAt - d.now : null), '',
-    d.nextCloseAt ? 'at ' + clock(d.nextCloseAt) : '—'));
-  const c = d.counters || {};
-  cards.push(card('Counters', (c.candles || 0) + ' / ' + (c.entries || 0) + ' / ' + (c.exits || 0),
-    c.errors > 0 ? 'short' : '',
-    'candles / entries / exits' + (c.errors ? ' · ' + c.errors + ' errors' : '')));
-  $('cards').innerHTML = cards.join('');
-
-  if (pos) {
-    const pnl = pos.unrealizedPnl;
-    const rows = [
-      ['Side', '<span class="' + pos.side + '">' + pos.side + '</span>'],
-      ['Size', fmt(pos.size, 4)],
-      ['Entry price', fmt(pos.entryPrice)],
-      ['Mark price', fmt(pos.markPrice !== null ? pos.markPrice : mark)],
-      ['Unrealized PnL', pnl === null || pnl === undefined
-        ? '—'
-        : '<span class="' + (pnl >= 0 ? 'pos' : 'neg') + '">' + fmt(pnl) + '</span>'],
-      ['Leverage', pos.leverage ? pos.leverage + 'x' : '—'],
-      ['Stop (engine backstop)', fmt(pos.side === 'long'
-        ? pos.entryPrice * (1 - d.config.stopLossPct)
-        : pos.entryPrice * (1 + d.config.stopLossPct))],
-    ];
-    $('position').innerHTML = '<table class="kv"><tbody>' +
-      rows.map((r) => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('') +
-      '</tbody></table>';
-  } else {
-    $('position').innerHTML = '<div class="kv"><div class="empty">Flat — no open position</div></div>';
-  }
-
-  const cf = d.config || {};
-  const sig = d.lastSignalChange;
-  const cfgRows = [
-    ['Strategy', d.strategy],
-    ['Risk per trade', cf.riskPercent + '%'],
-    ['Stop loss', (cf.stopLossPct * 100).toFixed(2) + '%'],
-    ['Take profit', cf.takeProfitPct === null ? 'none' : (cf.takeProfitPct * 100).toFixed(2) + '%'],
-    ['Max order quantity', cf.maxOrderQuantity === null ? 'unset' : cf.maxOrderQuantity],
-    ['Max order notional', cf.maxOrderNotional === null ? 'unset' : cf.maxOrderNotional + ' USDT'],
-    ['Min notional (venue)', d.instrument ? d.instrument.minNotional + ' USDT' : '—'],
-    ['Last candle close', d.lastCandle ? fmt(d.lastCandle.close) + ' at ' + clock(d.lastCandle.openTime) : '—'],
-    ['Last signal change', sig ? sig.from + ' \\u2192 ' + sig.to + ' at ' + clock(sig.at) : 'none this session'],
-  ];
-  $('config').innerHTML = cfgRows
-    .map((r) => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>')
-    .join('');
-
-  const logs = d.logs || [];
-  if (logs.length === 0) {
-    $('logs').innerHTML = '<div class="empty">No log lines yet</div>';
-  } else {
-    $('logs').innerHTML = '<table><tbody>' + logs.map((l) => {
-      const skip = { ts: 1, level: 1, msg: 1 };
-      const extra = Object.keys(l)
-        .filter((k) => !skip[k])
-        .map((k) => k + '=' + (typeof l[k] === 'object' ? JSON.stringify(l[k]) : l[k]))
-        .join(' ');
-      return '<tr><td class="t">' + clock(l.ts ? Date.parse(l.ts) : null) + '</td>' +
-        '<td class="l ' + (l.level || 'info') + '">' + (l.level || 'info') + '</td>' +
-        '<td class="m">' + esc(l.msg || '') +
-        (extra ? ' <span class="f">' + esc(extra) + '</span>' : '') + '</td></tr>';
-    }).join('') + '</tbody></table>';
-  }
-
-  $('uptime').textContent = 'up ' + duration(d.now - d.startedAt);
-  $('dot').className = 'dot ' + (d.wsConnected ? 'on' : 'off');
-  $('conn').textContent = d.wsConnected ? 'websocket live' : 'REST polling only';
-}
-
-function esc(s) {
-  return String(s).replace(/[&<>"]/g, (ch) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
-}
-
-async function tick() {
-  try {
-    const res = await fetch('/api/status', { cache: 'no-store' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    render(await res.json());
-    failures = 0;
-  } catch (err) {
-    failures += 1;
-    if (failures >= 2) {
-      $('dot').className = 'dot off';
-      $('conn').textContent = 'bot not responding — is it still running?';
-    }
-  }
-}
-
-tick();
-setInterval(tick, 2000);
-</script>
-</body>
-</html>`;
+function renderTime(){if(!snapshot)return;const now=estimatedNow(),remaining=snapshot.nextCloseAt?Math.max(0,snapshot.nextCloseAt-now):null;const countdown=$('countdown');if(countdown)countdown.textContent=duration(remaining);$('candle-progress').style.width=(remaining==null?0:Math.max(0,Math.min(100,100*(1-remaining/snapshot.intervalMs))))+'%';$('candle-detail').textContent=remaining==null?'Waiting for first closed candle':remaining===0?'Candle boundary reached · waiting for finalized data':'Strategy evaluates finalized '+snapshot.interval+' candles';$('updated').textContent='Updated '+duration(Date.now()-receivedAt)+' ago · uptime '+duration(now-snapshot.startedAt);}
+function renderLogs(){if(!snapshot)return;const search=$('search').value.toLowerCase(),logs=(snapshot.logs||[]).filter(l=>!snapshot.startedAt||!l.ts||Date.parse(l.ts)>=snapshot.startedAt),visible=logs.filter(l=>{const msg=String(l.msg||'');const matches=filter==='all'||(filter==='issues'?['warn','error'].includes(l.level):/entry|position|protection|exit|order|dry-run|sized/i.test(msg));return matches&&JSON.stringify(l).toLowerCase().includes(search);});const key=JSON.stringify([visible,filter,search]);if(key!==lastLogs){lastLogs=key;$('logs').innerHTML=visible.length?visible.map(l=>{const extra=Object.fromEntries(Object.entries(l).filter(([k])=>!['ts','level','msg'].includes(k)));const level=['warn','error','debug','info'].includes(l.level)?l.level:'info';return '<div class="event"><time>'+clock(l.ts?Date.parse(l.ts):null)+'</time><span class="event-level '+(level==='error'?'bad':level==='warn'?'warn':'blue')+'">'+level+'</span><div>'+esc(l.msg)+(Object.keys(extra).length?'<details><summary>Event details</summary><pre>'+esc(JSON.stringify(extra,null,2))+'</pre></details>':'')+'</div></div>';}).join(''):'<div class="empty">'+(logs.length?'No events match this filter.':'No activity recorded in this session yet.')+'</div>';}$('activity-count').textContent=visible.length+' of '+logs.length+' recent session events · up to 60 log records';}
+for(const b of document.querySelectorAll('.filter'))b.addEventListener('click',()=>{filter=b.dataset.filter;for(const item of document.querySelectorAll('.filter'))item.setAttribute('aria-pressed',String(item===b));renderLogs();});$('search').addEventListener('input',renderLogs);
+function theme(value){document.documentElement.dataset.theme=value;$('theme').textContent=value==='dark'?'Light theme':'Dark theme';try{localStorage.setItem('coindcx-theme',value);}catch{}}
+let savedTheme;try{savedTheme=localStorage.getItem('coindcx-theme');}catch{}theme(savedTheme==='light'?'light':'dark');$('theme').addEventListener('click',()=>theme(document.documentElement.dataset.theme==='dark'?'light':'dark'));
+async function tick(){try{const res=await fetch('/api/status',{cache:'no-store',signal:AbortSignal.timeout(8000)});if(!res.ok)throw new Error('HTTP '+res.status);const d=await res.json();snapshot=d;receivedAt=Date.now();render(d);}catch{$('dot').className='dot off';$('connection').textContent='Connection lost';status('Dashboard connection lost','Displayed values may be outdated. Retrying automatically. Last successful update: '+(receivedAt?clock(receivedAt):'never')+'.','bad');}finally{setTimeout(tick,2000);}}
+tick();setInterval(renderTime,1000);
+</script></body></html>`;
