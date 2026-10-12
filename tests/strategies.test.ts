@@ -1,0 +1,303 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  atrSeries,
+  donchianExcludingLast,
+  ema,
+  macd,
+  rsi,
+  sma,
+  stddev,
+  supertrendSeries,
+  trueRange,
+} from '../src/strategies/indicators.js';
+import { DonchianBreakoutStrategy } from '../src/strategies/donchian-breakout.js';
+import { Rsi2ReversionStrategy } from '../src/strategies/rsi2-reversion.js';
+import { SupertrendStrategy } from '../src/strategies/supertrend.js';
+import { MacdTrendStrategy } from '../src/strategies/macd-trend.js';
+import { log } from '../src/logger.js';
+import type { Candle } from '../src/strategy.js';
+
+for (const level of ['info', 'warn', 'error', 'debug'] as const) log[level] = () => {};
+
+const close = (n: number): number => n;
+function candle(o: number, h: number, l: number, c: number, i = 0): Candle {
+  return { open: o, high: h, low: l, close: c, volume: 1, openTime: i * 60_000, closeTime: i * 60_000 + 59_999 };
+}
+/** Candles whose high/low straddle the close by a fixed amount. */
+function fromCloses(closes: readonly number[], spread = 1): Candle[] {
+  return closes.map((c, i) => candle(c, c + spread, c - spread, c, i));
+}
+const near = (actual: number | null, expected: number, tol = 1e-9): void => {
+  assert.ok(actual !== null, 'expected a value, got null');
+  assert.ok(Math.abs((actual as number) - expected) < tol, `${actual} !== ${expected}`);
+};
+
+// --- primitives --------------------------------------------------------------
+
+test('sma averages only the trailing window and reports null before warmup', () => {
+  near(sma([1, 2, 3, 4, 5].map(close), 5), 3);
+  near(sma([10, 20, 30, 1, 2, 3].map(close), 3), 2);
+  assert.equal(sma([1, 2], 3), null);
+  assert.equal(sma([1, 2], 0), null);
+});
+
+test('ema seeds from an sma and then applies the 2/(n+1) weight', () => {
+  // period 3 over [1,2,3,4]: seed = mean(1,2,3) = 2, then 4*0.5 + 2*0.5 = 3
+  near(ema([1, 2, 3, 4].map(close), 3), 3);
+  assert.equal(ema([1, 2], 3), null);
+  // A flat series must return the same constant, not drift.
+  near(ema(new Array(50).fill(7), 10), 7);
+});
+
+test('rsi uses Wilder smoothing and pins the degenerate cases', () => {
+  // Monotonic rise: no losses at all -> 100.
+  near(rsi([1, 2, 3, 4, 5].map(close), 2), 100);
+  // Monotonic fall -> 0.
+  near(rsi([5, 4, 3, 2, 1].map(close), 2), 0);
+  // Perfectly flat -> no gains and no losses; must not be NaN or 100.
+  near(rsi(new Array(10).fill(5), 2), 50);
+  assert.equal(rsi([1, 2], 5), null);
+
+  // Hand-computed Wilder RSI(2) for [10, 11, 10]:
+  //   seed over first 2 changes: gain +1, loss -1 -> avgGain 0.5, avgLoss 0.5
+  //   -> rs = 1, rsi = 50
+  near(rsi([10, 11, 10].map(close), 2), 50);
+});
+
+test('rsi(2) reaches a deeply oversold reading after a sharp drop', () => {
+  const value = rsi([100, 101, 102, 103, 90].map(close), 2);
+  assert.ok(value !== null && value < 10, `expected < 10, got ${value}`);
+});
+
+test('trueRange accounts for gaps against the previous close', () => {
+  // No previous close: just the bar range.
+  near(trueRange(candle(10, 12, 9, 11), null), 3);
+  // Gap up: |high - prevClose| dominates the bar's own range.
+  near(trueRange(candle(20, 22, 19, 21), 10), 12);
+  // Gap down: |low - prevClose| dominates.
+  near(trueRange(candle(5, 7, 4, 6), 20), 16);
+});
+
+test('atr seeds from the mean of the first period true ranges then smooths', () => {
+  // Every bar has range 2 and no gaps, so ATR must be exactly 2 throughout.
+  const flat = fromCloses(new Array(30).fill(100), 1);
+  const series = atrSeries(flat, 14);
+  near(series[14] as number, 2);
+  near(series[29] as number, 2);
+  // Values before the seed index are null, never 0.
+  assert.equal(series[13], null);
+});
+
+test('donchian excludes the current bar so a breakout is not self-referential', () => {
+  const candles = [
+    candle(10, 12, 8, 11, 0),
+    candle(11, 15, 9, 14, 1),
+    candle(14, 16, 13, 15, 2),
+    // Current bar: its own high of 99 must NOT appear in the channel.
+    candle(15, 99, 14, 98, 3),
+  ];
+  const ch = donchianExcludingLast(candles, 3);
+  assert.deepEqual(ch, { upper: 16, lower: 8 });
+  // Needs period + 1 bars: period for the window, one for the current bar.
+  assert.equal(donchianExcludingLast(candles, 4), null);
+});
+
+test('macd seeds the signal line from the macd series, not from index zero', () => {
+  // A *constant-slope* ramp is the degenerate case: MACD converges to exactly
+  // its signal line, leaving only float residue. Use an accelerating series so
+  // the fast EMA genuinely leads.
+  const closes = Array.from({ length: 80 }, (_, i) => 100 + i * i * 0.05);
+  const value = macd(closes, 12, 26, 9);
+  assert.ok(value !== null);
+  const v = value as { macd: number; signal: number; histogram: number };
+  assert.ok(v.macd > 0, `expected positive macd, got ${v.macd}`);
+  assert.ok(v.macd > v.signal, `expected macd above signal, got ${v.macd} vs ${v.signal}`);
+  near(v.histogram, v.macd - v.signal, 1e-12);
+
+  // A flat series has identical EMAs, so every component collapses to zero.
+  const flat = macd(new Array(80).fill(50), 12, 26, 9);
+  near((flat as { macd: number }).macd, 0, 1e-9);
+
+  // Documents the convergence that motivates the strategy's deadband: on a
+  // linear ramp the two lines are equal to within float noise.
+  const linear = macd(Array.from({ length: 120 }, (_, i) => 100 + i), 12, 26, 9);
+  const lv = linear as { macd: number; signal: number };
+  assert.ok(Math.abs(lv.macd - lv.signal) < 1e-9, 'linear ramp should converge to a tie');
+
+  assert.equal(macd(closes, 26, 12, 9), null, 'fast >= slow is rejected');
+});
+
+test('stddev is zero on a flat window and positive otherwise', () => {
+  near(stddev(new Array(10).fill(5), 5), 0);
+  near(stddev([2, 4, 4, 4, 5, 5, 7, 9].map(close), 8), 2);
+});
+
+test('supertrend carries bands forward and only flips when price closes through', () => {
+  // Steady uptrend -> direction must settle 'up' and stay there.
+  const up = fromCloses(Array.from({ length: 60 }, (_, i) => 100 + i * 2), 1);
+  const upDir = supertrendSeries(up, 10, 3);
+  assert.equal(upDir[upDir.length - 1], 'up');
+
+  // Steady downtrend -> 'down'.
+  const down = fromCloses(Array.from({ length: 60 }, (_, i) => 200 - i * 2), 1);
+  const downDir = supertrendSeries(down, 10, 3);
+  assert.equal(downDir[downDir.length - 1], 'down');
+
+  // Uptrend then a hard reversal must actually flip the direction.
+  const reversal = fromCloses(
+    [...Array.from({ length: 40 }, (_, i) => 100 + i * 2), ...Array.from({ length: 20 }, (_, i) => 178 - i * 10)],
+    1,
+  );
+  const revDir = supertrendSeries(reversal, 10, 3);
+  assert.equal(revDir[revDir.length - 1], 'down');
+
+  // Pre-warmup entries are null rather than a guessed direction.
+  assert.equal(supertrendSeries(up, 10, 3)[5], null);
+});
+
+// --- strategies --------------------------------------------------------------
+
+const warm = (n: number, f: (i: number) => number): Candle[] =>
+  fromCloses(Array.from({ length: n }, (_, i) => f(i)), 1);
+
+test('donchian goes long on an upside breakout and flat on the tighter exit channel', () => {
+  const s = new DonchianBreakoutStrategy({ entryPeriod: 20, exitPeriod: 10, allowShorts: false });
+  // Flat history at 100 -> channel is 99/101 (spread 1), no signal.
+  s.warmup(warm(60, () => 100));
+  assert.equal(s.currentTarget(), 'flat');
+
+  // Close well above the 20-bar high -> long.
+  assert.equal(s.onClosedCandle(candle(100, 130, 99, 130, 60)), 'long');
+  // Drifting sideways inside both channels holds the position.
+  assert.equal(s.onClosedCandle(candle(130, 131, 129, 130, 61)), 'long');
+  // A close below the 10-bar low exits to flat, not to short.
+  assert.equal(s.onClosedCandle(candle(130, 131, 50, 50, 62)), 'flat');
+});
+
+test('donchian only shorts when shorts are enabled', () => {
+  const opts = { entryPeriod: 20, exitPeriod: 10 };
+  const longOnly = new DonchianBreakoutStrategy({ ...opts, allowShorts: false });
+  const both = new DonchianBreakoutStrategy({ ...opts, allowShorts: true });
+  for (const s of [longOnly, both]) s.warmup(warm(60, () => 100));
+
+  const breakdown = candle(100, 101, 50, 50, 60);
+  assert.equal(longOnly.onClosedCandle(breakdown), 'flat');
+  assert.equal(both.onClosedCandle(breakdown), 'short');
+});
+
+test('donchian seeds its target from history so a restart mid-trend does not re-enter', () => {
+  // A persistent uptrend: a freshly warmed strategy should already be long.
+  const s = new DonchianBreakoutStrategy({ entryPeriod: 20, exitPeriod: 10, allowShorts: false });
+  s.warmup(warm(80, i => 100 + i * 3));
+  assert.equal(s.currentTarget(), 'long');
+});
+
+test('rsi2 requires the trend filter to agree before entering', () => {
+  const s = new Rsi2ReversionStrategy({
+    rsiPeriod: 2, oversold: 10, overbought: 90,
+    trendSmaPeriod: 50, exitSmaPeriod: 5, allowShorts: false,
+  });
+  // Steep uptrend (slope 5), so a dip can be sharp enough to drive RSI(2)
+  // under 10 while price is still comfortably above its 50-SMA. On a shallow
+  // trend any such dip also breaks the filter, and the entry correctly never
+  // fires — which is the strategy working, not a bug.
+  s.warmup(warm(120, i => 100 + i * 5)); // last close 695, SMA(50) ~ 573
+  assert.equal(s.currentTarget(), 'flat');
+
+  // One -50 bar: RSI(2) ~ 9, close 645 still above the 50-SMA -> long.
+  assert.equal(s.onClosedCandle(candle(695, 696, 640, 645, 120)), 'long');
+
+  // Closing back above the 5-SMA is the published exit.
+  assert.equal(s.onClosedCandle(candle(645, 705, 644, 700, 121)), 'flat');
+});
+
+test('rsi2 refuses to buy an oversold downtrend (the filter is the strategy)', () => {
+  const s = new Rsi2ReversionStrategy({
+    rsiPeriod: 2, oversold: 10, overbought: 90,
+    trendSmaPeriod: 50, exitSmaPeriod: 5, allowShorts: false,
+  });
+  // Steady downtrend: price below its 50-SMA the whole way.
+  s.warmup(warm(120, i => 300 - i));
+  // Another leg down leaves RSI(2) deeply oversold, but the filter blocks it.
+  assert.equal(s.onClosedCandle(candle(180, 181, 120, 125, 120)), 'flat');
+});
+
+test('supertrend holds long through an uptrend and flips on reversal', () => {
+  const s = new SupertrendStrategy({ period: 10, multiplier: 3, allowShorts: true });
+  s.warmup(warm(80, i => 100 + i * 2));
+  assert.equal(s.currentTarget(), 'long');
+
+  // Drive price hard through the lower band.
+  let last: string = 'long';
+  for (let i = 0; i < 12; i += 1) {
+    last = s.onClosedCandle(candle(250 - i * 20, 251 - i * 20, 249 - i * 20 - 20, 230 - i * 20, 80 + i));
+  }
+  assert.equal(last, 'short');
+});
+
+test('supertrend goes flat instead of short when shorts are disabled', () => {
+  const s = new SupertrendStrategy({ period: 10, multiplier: 3, allowShorts: false });
+  s.warmup(warm(80, i => 300 - i * 2));
+  assert.equal(s.currentTarget(), 'flat');
+});
+
+test('macd trend follows the signal cross and respects its optional sma filter', () => {
+  // Accelerating uptrend, so the fast EMA genuinely leads rather than
+  // converging to a tie.
+  const rising = (i: number): number => 100 + i * i * 0.05;
+  const plain = new MacdTrendStrategy({
+    fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, trendSmaPeriod: 0, allowShorts: false,
+  });
+  plain.warmup(warm(120, rising));
+  assert.equal(plain.currentTarget(), 'long');
+
+  // With a 100-SMA filter, the same rising series is still long...
+  const filtered = new MacdTrendStrategy({
+    fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, trendSmaPeriod: 100, allowShorts: false,
+  });
+  filtered.warmup(warm(150, rising));
+  assert.equal(filtered.currentTarget(), 'long');
+
+  // ...but an accelerating downtrend is flat (long-only) rather than long.
+  const downtrend = new MacdTrendStrategy({
+    fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, trendSmaPeriod: 100, allowShorts: false,
+  });
+  downtrend.warmup(warm(150, i => 2000 - i * i * 0.05));
+  assert.equal(downtrend.currentTarget(), 'flat');
+});
+
+test('macd holds its target when the lines are tied rather than inventing a signal', () => {
+  // A perfectly linear ramp converges to macd === signal. Long-only, so the
+  // correct outcome is to hold flat, not to flip on 1e-15 of float residue.
+  const s = new MacdTrendStrategy({
+    fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, trendSmaPeriod: 0, allowShorts: true,
+  });
+  s.warmup(warm(150, i => 100 + i));
+  const target = s.currentTarget();
+  assert.notEqual(target, 'short', 'a float-noise tie must not produce a short');
+});
+
+test('every strategy reports requiredCandles and refuses to signal before warmup', () => {
+  const strategies = [
+    new DonchianBreakoutStrategy({ entryPeriod: 20, exitPeriod: 10, allowShorts: false }),
+    new SupertrendStrategy({ period: 10, multiplier: 3, allowShorts: false }),
+    new Rsi2ReversionStrategy({
+      rsiPeriod: 2, oversold: 10, overbought: 90,
+      trendSmaPeriod: 200, exitSmaPeriod: 5, allowShorts: false,
+    }),
+    new MacdTrendStrategy({
+      fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, trendSmaPeriod: 0, allowShorts: false,
+    }),
+  ];
+  for (const s of strategies) {
+    assert.ok(s.requiredCandles > 0, `${s.name} must declare requiredCandles`);
+    assert.equal(s.isReady(), false, `${s.name} must not be ready before warmup`);
+    assert.equal(s.currentTarget(), null, `${s.name} must report no target before warmup`);
+    // One candle is never enough for any of these.
+    assert.equal(s.onClosedCandle(candle(100, 101, 99, 100, 0)), 'flat');
+  }
+  // The 200-SMA variant must demand real history.
+  const rsiStrategy = strategies[2] as Rsi2ReversionStrategy;
+  assert.ok(rsiStrategy.requiredCandles > 200, 'rsi2 with a 200 SMA needs >200 candles');
+});

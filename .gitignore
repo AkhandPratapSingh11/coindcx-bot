@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.log
+logs/
+records/
+.bot.lock
+.DS_Store
