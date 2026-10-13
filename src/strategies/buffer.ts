@@ -1,11 +1,9 @@
 /**
  * Rolling candle history shared by the indicator-based strategies.
  *
- * Indicators are recomputed over the retained window on each closed candle
- * rather than being updated incrementally. That is marginally more work for a
- * few hundred candles — and far harder to get wrong. Incremental indicator
- * state is where stale-value and double-update bugs live, and those produce
- * losses that look like bad luck rather than bad code.
+ * Most strategies recompute indicators over this retained window. MACD keeps
+ * continuous EMA state separately so rolling the buffer cannot reseed it;
+ * its optional SMA filter still uses this trailing history.
  */
 
 import type { Candle } from '../strategy.js';

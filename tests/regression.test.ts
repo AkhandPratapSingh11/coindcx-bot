@@ -10,6 +10,7 @@ import { loadConfig, type Config } from '../src/config.js';
 import { log } from '../src/logger.js';
 import { venueRequest, type VenueRequest } from '../src/venue.js';
 import { assertClientOrderId, MAX_CLIENT_ORDER_ID_LENGTH } from '../src/instrument.js';
+import { MemoryEntryBlockStore, type EntryBlockStore } from '../src/entry-block.js';
 
 for (const level of ['info', 'warn', 'error', 'debug'] as const) log[level] = () => {};
 const cfg: Config = { ...loadConfig(), apiKey: 'test', apiSecret: 'test-secret', mode: 'live',
@@ -24,8 +25,8 @@ const position = (extras = {}) => ({ id: 'position-1', pair: cfg.pair, active_po
   avg_price: 100, stop_loss_trigger: 98, take_profit_trigger: 110, ...extras });
 const order = { id: 'order-1', pair: cfg.pair, total_quantity: 1, side: 'buy', status: 'filled' };
 const entry = { side: 'buy' as const, quantity: 1, stopLoss: 98, takeProfit: 110 };
-function broker(request: VenueRequest, config = cfg): Broker {
-  const b = new Broker({} as CoinDCXClient, config, prices, request);
+function broker(request: VenueRequest, config = cfg, blockStore: EntryBlockStore = new MemoryEntryBlockStore()): Broker {
+  const b = new Broker({} as CoinDCXClient, config, prices, request, blockStore);
   (b as any).instrument = instrument;
   return b;
 }
@@ -190,6 +191,53 @@ test('uncertain submission is not resubmitted even when positions still appear f
   await assert.rejects(b.open(entry), /timeout/);
   await assert.rejects(b.open(entry), /Entries blocked/);
   assert.equal(submissions, 1);
+});
+
+test('reconstructed broker retains uncertain entry block even when the venue still reports flat', async () => {
+  const store = new MemoryEntryBlockStore();
+  let submissions = 0;
+  const request: VenueRequest = async (_m, path) => {
+    if (path === 'orders' || path === 'positions') return [];
+    if (path === 'orders/create') { submissions++; throw new Error('timeout after send'); }
+    throw new Error(path);
+  };
+  await assert.rejects(broker(request, cfg, store).open(entry), /timeout/);
+  const restarted = broker(request, cfg, store);
+  assert.match(restarted.getEntryBlock()!, /timeout after send/);
+  await assert.rejects(restarted.open(entry), /Entries blocked/);
+  assert.equal(submissions, 1);
+});
+
+test('journal failure prevents submission before any money-changing request', async () => {
+  let submissions = 0;
+  const b = broker(async (_m, path) => {
+    if (path === 'orders' || path === 'positions') return [];
+    submissions++; throw new Error(path);
+  }, cfg, { read: () => null, write: () => { throw new Error('disk full'); } });
+  await assert.rejects(b.open(entry), /disk full/);
+  await assert.rejects(b.open(entry), /Entries blocked/);
+  assert.equal(submissions, 0);
+});
+
+test('failure to persist a new error reason still attempts to exit unsafe exposure', async () => {
+  let created = false, exited = false, writes = 0;
+  const store = new MemoryEntryBlockStore();
+  const b = broker(async (_m, path) => {
+    if (path === 'positions') return created && !exited ? [position({ stop_loss_trigger: null })] : [];
+    if (path === 'orders') return [];
+    if (path === 'orders/create') { created = true; return [order]; }
+    if (path === 'positions/create_tpsl') throw new Error('protection failed');
+    if (path === 'orders/cancel') return {};
+    if (path === 'positions/exit') { exited = true; return {}; }
+    throw new Error(path);
+  }, cfg, { read: () => store.read(), write: reason => {
+    if (++writes > 1) throw new Error('disk full');
+    store.write(reason);
+  } });
+  await assert.rejects(b.open(entry), /protection failed/);
+  assert.equal(exited, true);
+  assert.match(store.read()!, /has not been reconciled/);
+  assert.match(b.getEntryBlock()!, /protection failed/);
 });
 
 test('exit waits through delayed venue position reads', async () => {

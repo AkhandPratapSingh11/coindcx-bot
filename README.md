@@ -28,8 +28,10 @@ npm run paper       # run the engine against live prices, simulated fills
 ### Monitoring UI
 
 While the bot runs it serves a dashboard at **http://127.0.0.1:8787** — target vs. actual position,
-mark price with a staleness flag, equity, a countdown to the next candle close, the live config,
-and a tail of the structured log. It polls every 2 seconds and is read-only: there are no controls,
+market midpoint with a staleness flag, the sizing balance, a countdown to the next candle close,
+the effective mode and risk limits, and a tail of the structured log. A chart shows up to 60
+completed candles with pointer and keyboard inspection. The position panel shows stop, entry,
+midpoint and take-profit levels; layouts adapt to desktop and mobile. It polls every 2 seconds and is read-only: there are no controls,
 so a browser tab cannot start, stop or alter a trade.
 
 It binds to **loopback only**. It exposes positions and balances, so don't put it on a public
@@ -38,6 +40,21 @@ interface — tunnel over SSH (`ssh -L 8787:127.0.0.1:8787 host`) if you need it
 
 Its independent position and wallet refreshes are throttled to once every four seconds.
 Opening the dashboard adds these read requests to the engine’s own polling.
+Log reads are asynchronous, cached for four seconds and limited to the last 128 KiB / 60
+complete records. Log files rotate at UTC midnight. Account refresh failures are visible;
+live `available_balance` is labeled **Available balance**, the `balance` fallback **Wallet
+balance**, and simulated futures equity **Paper equity**. The API retains `equity` for
+compatibility and adds `equityBasis`; the sizing formula is unchanged.
+
+### Effective mode under systemd
+
+Node's `--env-file-if-exists=.env` preserves variables already in the process environment.
+`npm run live` explicitly sets `MODE=live`; `npm run paper` sets `MODE=paper`. A systemd
+`Environment=MODE=live` also overrides `MODE=paper` in `.env`. Read the dashboard's effective
+mode or the `client ready` startup log before operating the bot. A service description is
+only a label: use `Description=CoinDCX futures trading bot` to avoid a stale paper/live label.
+Keep the deployment's mode in one place, and review `systemctl cat coindcx-bot.service` for
+overrides before a restart. Never infer that orders are simulated from `.env` alone.
 
 ### Going live
 
@@ -191,7 +208,11 @@ Return a target, not an order — the engine owns sizing, stops and order placem
   exit-only status and protective trigger direction. Stop and TP prices use the venue price step.
 - **Writes are submitted once.** Every entry carries a client order ID for tracing; futures
   deduplication is not assumed. An uncertain acknowledgement blocks further entries for the
-  lifetime of the process. Inspect positions and working orders before restarting.
+  lifetime of the process and across live restarts. Before submission, the broker atomically
+  writes and syncs a private journal under `.bot-state/`, scoped to the API key and instrument
+  using a hash. It clears the journal only after verified protection and cancellation of entry
+  remainders, or a definitive create rejection. An unreadable/corrupt journal prevents startup;
+  an unwritable journal prevents entry. Dry-run never clears an existing live block.
 - **Verified venue protection.** Entry requests include `stop_loss_price` and optional
   `take_profit_price`. The broker confirms the position’s triggers, attaches structured market
   TP/SL by position ID when needed, and exits if it cannot verify protection. Startup also
@@ -202,6 +223,10 @@ Return a target, not an order — the engine owns sizing, stops and order placem
   in order, and only the newest target trades. Gaps or stale/malformed responses block entries;
   gaps beyond 1000 bars require a restart to warm up again. Pending signals survive busy actions
   and temporary read failures.
+- **Continuous MACD.** Fast, slow and signal EMAs use SMA seeds and update through every
+  warmup/live candle. Dropping display/filter history cannot reseed them. Replacing the latest
+  candle rolls back its previous EMA update. Restarting still seeds from the configured warmup
+  window, so it need not match an indefinitely running chart exactly.
 - **Positions are read from the venue, never from memory.** Local state drifts.
 - **Startup reconciliation** adopts any existing position rather than opening a second one.
 - **Single-instance PID lock.** Two copies on one account cancel each other's orders.
@@ -232,9 +257,20 @@ on REST polling alone with no socket.
 - **Paper margin accounting drifts.** The engine's `usedMargin` is not fully released on close.
   Sizing uses `futuresBalance + unrealizedPnl` to avoid compounding it, but don't read paper
   margin or long-run paper PnL as accurate.
-- **No persistence.** Paper state is in-memory; a restart starts flat. Live exposure lives on
-  the venue. The uncertain-entry block is also in memory: inspect the venue before restarting
-  after an order timeout or protection failure.
+- **Limited persistence.** Paper positions, monitoring counters and indicator state are in
+  memory. Live exposure lives on the venue; uncertain live submissions persist in `.bot-state/`.
+  Keep that directory when deploying or moving the bot. Changing API keys changes the journal
+  scope and requires checking for outstanding submissions associated with the previous key.
+
+### Recovering a blocked live entry
+
+Keep the process stopped while investigating. Read the reason and client order ID from the
+matching `.bot-state/entry-*.json` file, then review the exchange's order history, working
+orders, fills and actual position. A single flat response after a timeout is insufficient
+evidence that the order was never accepted. Resolve outstanding orders/exposure and verify
+position protection before removing that specific journal file and restarting. Startup
+reconciliation does not clear an uncertain-entry journal automatically. Do not delete all
+journals or replace the API key to bypass a block.
 
 ---
 

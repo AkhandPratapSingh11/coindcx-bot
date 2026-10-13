@@ -113,6 +113,7 @@ export class Engine {
     if (lastClosed) {
       state.update({
         lastCandle: { openTime: lastClosed.openTime, close: lastClosed.close },
+        candleHistory: closed.slice(-60).map(c => ({ openTime: c.openTime, close: c.close })),
       });
     }
     // Publish the seeded target so the UI shows the strategy's standing view
@@ -262,10 +263,12 @@ export class Engine {
       }
       this.latestOpenTime = sorted.at(-1)?.openTime ?? this.latestOpenTime;
       this.dataBlocked = false;
+      state.update({ candleDataBlocked: false });
       // Trading runs outside the polling promise: another closed candle can
       // update the pending target while an exchange request is still in flight.
     } catch (err) {
       this.dataBlocked = true;
+      state.update({ candleDataBlocked: true });
       throw err;
     }
   }
@@ -282,6 +285,7 @@ export class Engine {
     state.update({
       target,
       lastCandle: { openTime: candle.openTime, close: candle.close },
+      candleHistory: [...state.get().candleHistory, { openTime: candle.openTime, close: candle.close }].slice(-60),
       ...(previousTarget !== null && previousTarget !== target
         ? { lastSignalChange: { at: Date.now(), from: previousTarget, to: target } }
         : {}),

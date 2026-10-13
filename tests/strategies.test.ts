@@ -15,6 +15,7 @@ import { DonchianBreakoutStrategy } from '../src/strategies/donchian-breakout.js
 import { Rsi2ReversionStrategy } from '../src/strategies/rsi2-reversion.js';
 import { SupertrendStrategy } from '../src/strategies/supertrend.js';
 import { MacdTrendStrategy } from '../src/strategies/macd-trend.js';
+import { RunningMacd } from '../src/strategies/indicators.js';
 import { log } from '../src/logger.js';
 import type { Candle } from '../src/strategy.js';
 
@@ -276,6 +277,39 @@ test('macd holds its target when the lines are tied rather than inventing a sign
   s.warmup(warm(150, i => 100 + i));
   const target = s.currentTarget();
   assert.notEqual(target, 'short', 'a float-noise tie must not produce a short');
+});
+
+test('continuous MACD matches full-history calculations beyond the candle buffer capacity', () => {
+  const history = warm(600, i => 150 + Math.sin(i / 11) * 20 + Math.cos(i / 37) * 10);
+  const indicator = new RunningMacd(12, 26, 9);
+  const strategy = new MacdTrendStrategy({ fastPeriod: 12, slowPeriod: 26, signalPeriod: 9,
+    trendSmaPeriod: 0, allowShorts: true });
+  strategy.warmup(history.slice(0, 250));
+  for (let i = 0; i < history.length; i++) {
+    indicator.update(history[i]!.close);
+    const expected = macd(history.slice(0, i + 1).map(c => c.close), 12, 26, 9);
+    const actual = indicator.current();
+    if (!expected) { assert.equal(actual, null); continue; }
+    near(actual!.macd, expected.macd, 1e-10);
+    near(actual!.signal, expected.signal, 1e-10);
+    if (i >= 250) {
+      assert.equal(strategy.onClosedCandle(history[i]!), expected.histogram > 0 ? 'long' : 'short');
+    }
+  }
+});
+
+test('replacing the newest MACD candle does not double-update continuous indicators', () => {
+  const options = { fastPeriod: 12, slowPeriod: 26, signalPeriod: 9,
+    trendSmaPeriod: 0, allowShorts: true };
+  const history = warm(250, i => 150 + Math.sin(i / 11) * 20);
+  const strategy = new MacdTrendStrategy(options), reference = new MacdTrendStrategy(options);
+  strategy.warmup(history); reference.warmup(history);
+  const next = { ...history.at(-1)!, openTime: history.at(-1)!.openTime + 60_000, close: 1000 };
+  strategy.onClosedCandle(next);
+  const corrected = { ...next, close: 90 };
+  assert.equal(strategy.onClosedCandle(corrected), reference.onClosedCandle(corrected));
+  const following = { ...corrected, openTime: corrected.openTime + 60_000, close: 150 };
+  assert.equal(strategy.onClosedCandle(following), reference.onClosedCandle(following));
 });
 
 test('every strategy reports requiredCandles and refuses to signal before warmup', () => {
