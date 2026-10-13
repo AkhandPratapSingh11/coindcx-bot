@@ -9,14 +9,13 @@ import { join } from 'node:path';
 type Level = 'debug' | 'info' | 'warn' | 'error';
 
 const LOG_DIR = 'logs';
-let logFile: string | null = null;
+export function currentLogPath(): string {
+  return join(LOG_DIR, `bot-${new Date().toISOString().slice(0, 10)}.jsonl`);
+}
 
 function ensureLogFile(): string {
-  if (logFile) return logFile;
   mkdirSync(LOG_DIR, { recursive: true });
-  const day = new Date().toISOString().slice(0, 10);
-  logFile = join(LOG_DIR, `bot-${day}.jsonl`);
-  return logFile;
+  return currentLogPath();
 }
 
 /** Keys whose values are redacted before anything is printed or written. */

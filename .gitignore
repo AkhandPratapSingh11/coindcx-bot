@@ -5,4 +5,5 @@ dist/
 logs/
 records/
 .bot.lock
+.bot-state/
 .DS_Store

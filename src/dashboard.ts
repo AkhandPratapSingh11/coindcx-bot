@@ -10,34 +10,14 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { readFileSync } from 'node:fs';
 import type { Config } from './config.js';
-import { log } from './logger.js';
+import { currentLogPath, log } from './logger.js';
+import { recentLogLines } from './log-tail.js';
 import { page } from './dashboard-page.js';
 import * as state from './state.js';
 
-const MAX_LOG_LINES = 60;
 /** The status route refreshes position/equity at most this often. */
 const REFRESH_THROTTLE_MS = 4000;
-
-function recentLogLines(path: string): unknown[] {
-  try {
-    const text = readFileSync(path, 'utf8');
-    const lines = text.split('\n').filter((l) => l.trim() !== '');
-    return lines
-      .slice(-MAX_LOG_LINES)
-      .reverse()
-      .map((l) => {
-        try {
-          return JSON.parse(l);
-        } catch {
-          return { level: 'info', msg: l };
-        }
-      });
-  } catch {
-    return [];
-  }
-}
 
 export interface DashboardOptions {
   cfg: Config;
@@ -53,17 +33,28 @@ export function startDashboard(opts: DashboardOptions): Server | null {
     return null;
   }
 
-  const day = new Date().toISOString().slice(0, 10);
-  const logPath = `logs/bot-${day}.jsonl`;
-
   let lastRefresh = 0;
   let refreshing: Promise<void> | null = null;
+  let lastLogRefresh = 0;
+  let cachedLogs: unknown[] = [];
+  let readingLogs: Promise<void> | null = null;
+  let refreshError: string | null = null;
+
+  const maybeReadLogs = async (): Promise<void> => {
+    if (readingLogs) return readingLogs;
+    if (Date.now() - lastLogRefresh < REFRESH_THROTTLE_MS) return;
+    readingLogs = recentLogLines(currentLogPath()).then(lines => { cachedLogs = lines; })
+      .finally(() => { lastLogRefresh = Date.now(); readingLogs = null; });
+    return readingLogs;
+  };
 
   const maybeRefresh = async (): Promise<void> => {
     if (refreshing) return refreshing;
     if (Date.now() - lastRefresh < REFRESH_THROTTLE_MS) return;
     refreshing = refresh()
+      .then(() => { refreshError = null; })
       .catch((err: unknown) => {
+        refreshError = 'Position or wallet refresh failed; displayed values may be outdated.';
         // A dashboard poll must never be able to break the bot.
         log.warn('dashboard refresh failed', { error: String(err) });
       })
@@ -77,11 +68,13 @@ export function startDashboard(opts: DashboardOptions): Server | null {
   const handler = (req: IncomingMessage, res: ServerResponse): void => {
     const url = req.url ?? '/';
 
-    if (url.startsWith('/api/status')) {
-      void maybeRefresh().then(() => {
+    if (url === '/api/status' || url.startsWith('/api/status?')) {
+      void Promise.all([maybeRefresh(), maybeReadLogs()]).then(() => {
         const snap = state.get();
         const body = JSON.stringify({
           ...snap,
+          quoteStale: snap.quoteAt === null || Date.now() - snap.quoteAt > 15_000,
+          refreshError,
           now: Date.now(),
           nextCloseAt: state.nextCloseAt(),
           entryBlock: opts.entryBlock(),
@@ -93,8 +86,10 @@ export function startDashboard(opts: DashboardOptions): Server | null {
             takeProfitPct: cfg.takeProfitPct ?? null,
             maxOrderQuantity: cfg.maxOrderQuantity ?? null,
             maxOrderNotional: cfg.maxOrderNotional ?? null,
+            maxSlippagePct: cfg.maxSlippagePct,
+            allowShorts: cfg.allowShorts,
           },
-          logs: recentLogLines(logPath),
+          logs: cachedLogs,
         });
         res.writeHead(200, {
           'content-type': 'application/json',

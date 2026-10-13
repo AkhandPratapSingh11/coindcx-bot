@@ -22,6 +22,7 @@ import {
 import { log } from './logger.js';
 import type { PriceFeed } from './marks.js';
 import * as state from './state.js';
+import { entryBlockStore, type EntryBlockStore } from './entry-block.js';
 
 /** Only classify create failures; HTTP 408 leaves the submission uncertain. */
 function isDefinitiveRejection(err: unknown): boolean {
@@ -114,6 +115,14 @@ export class Broker {
   private instrument: Instrument | null = null;
   private readonly request: VenueRequest;
   private entryBlock: string | null = null;
+  private readonly blockStore: EntryBlockStore;
+
+  private setEntryBlock(reason: string | null): void {
+    // Keep the in-memory latch even when persisting a failure reason fails.
+    if (reason !== null) this.entryBlock = reason;
+    this.blockStore.write(reason);
+    this.entryBlock = reason;
+  }
 
   getEntryBlock(): string | null {
     return this.entryBlock;
@@ -124,8 +133,14 @@ export class Broker {
     private readonly cfg: Config,
     private readonly prices: PriceFeed,
     request?: VenueRequest,
+    blockStore?: EntryBlockStore,
   ) {
     this.request = request ?? venueRequest(client, cfg);
+    this.blockStore = blockStore ?? entryBlockStore(cfg);
+    this.entryBlock = this.blockStore.read();
+    if (this.entryBlock) log.warn('restored entry block; venue reconciliation requires operator review', {
+      reason: this.entryBlock,
+    });
   }
 
   /**
@@ -265,6 +280,7 @@ export class Broker {
       // Not `totalEquity`: the paper engine defines that as spot + futures,
       // and seeding both from PAPER_BALANCE would double-count the account.
       // A futures bot sizes off the futures wallet plus open PnL.
+      state.update({ equityBasis: 'paper-equity' });
       return acct.futuresBalance + acct.unrealizedPnl;
     }
     const wallet = await this.request('GET', 'wallets');
@@ -273,6 +289,7 @@ export class Broker {
     if (!entry) throw new Error(`No ${this.cfg.quoteCurrency} futures wallet`);
     const balance = Number(entry.available_balance ?? entry.balance);
     if (!Number.isFinite(balance) || balance < 0) throw new Error('Invalid wallet balance');
+    state.update({ equityBasis: entry.available_balance != null ? 'available-balance' : 'wallet-balance' });
     return balance;
   }
 
@@ -317,7 +334,7 @@ export class Broker {
 
     // Set this BEFORE sending: timeouts and malformed acknowledgements cannot
     // cause the next candle to submit a second entry under a new UUID.
-    this.entryBlock = `submission ${clientOrderId} has not been reconciled`;
+    this.setEntryBlock(`submission ${clientOrderId} has not been reconciled`);
     let createAcknowledged = false;
     let orders: FuturesOrderResponse[] = [];
     try {
@@ -343,15 +360,20 @@ export class Broker {
       }
       const finalPos = await this.getPosition();
       if (finalPos) await this.ensureProtection(finalPos, stop, tp);
-      this.entryBlock = null;
+      this.setEntryBlock(null);
       return order;
     } catch (err) {
-      this.entryBlock =
-        `submission ${clientOrderId} failed: ${err instanceof Error ? err.message : String(err)}`;
+      try {
+        this.setEntryBlock(`submission ${clientOrderId} failed: ${err instanceof Error ? err.message : String(err)}`);
+      } catch (journalError) {
+        log.error('could not update entry journal; original submission block retained', {
+          error: String(journalError),
+        });
+      }
       // A rejection of a later read, cancellation or TP/SL request says
       // nothing about whether the entry was submitted. Keep those latched.
       if (!createAcknowledged && isDefinitiveRejection(err)) {
-        this.entryBlock = null;
+        this.setEntryBlock(null);
         log.warn('venue rejected the create request; entries re-enabled', { error: String(err) });
         throw err;
       }

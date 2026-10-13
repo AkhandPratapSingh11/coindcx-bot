@@ -28,6 +28,9 @@ export interface Snapshot {
 
   equity: number | null;
   equityAt: number | null;
+  equityBasis: 'available-balance' | 'wallet-balance' | 'paper-equity' | null;
+  candleHistory: { openTime: number; close: number }[];
+  candleDataBlocked: boolean;
 
   position: OpenPosition | null;
   positionAt: number | null;
@@ -56,6 +59,9 @@ const snapshot: Snapshot = {
   instrument: null,
   equity: null,
   equityAt: null,
+  equityBasis: null,
+  candleHistory: [],
+  candleDataBlocked: false,
   position: null,
   positionAt: null,
   target: null,

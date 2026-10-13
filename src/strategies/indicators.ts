@@ -1,9 +1,8 @@
 /**
  * Indicator primitives.
  *
- * Pure functions over arrays, so every one of them is unit-testable against
- * hand-computed values — which matters because the usual way a bot loses money
- * quietly is an indicator that is subtly wrong rather than a logic error.
+ * Batch functions over arrays and a continuous MACD accumulator, tested
+ * against hand-computed values and full-history calculations.
  *
  * Conventions:
  *  - Series are oldest-first.
@@ -154,6 +153,61 @@ export interface MacdValue {
   macd: number;
   signal: number;
   histogram: number;
+}
+
+/** Continuous SMA-seeded EMA; dropping old candles does not change its seed. */
+class RunningEma {
+  private count = 0;
+  private sum = 0;
+  private value: number | null = null;
+  constructor(private readonly period: number) {}
+
+  update(value: number): number | null {
+    if (this.value === null) {
+      this.sum += value;
+      if (++this.count === this.period) this.value = this.sum / this.period;
+    } else {
+      const alpha = 2 / (this.period + 1);
+      this.value = value * alpha + this.value * (1 - alpha);
+    }
+    return this.value;
+  }
+
+  copy(): RunningEma {
+    const copy = new RunningEma(this.period);
+    copy.count = this.count; copy.sum = this.sum; copy.value = this.value;
+    return copy;
+  }
+}
+
+export class RunningMacd {
+  private fast: RunningEma;
+  private slow: RunningEma;
+  private signal: RunningEma;
+  private value: MacdValue | null = null;
+
+  constructor(private readonly fastPeriod: number, private readonly slowPeriod: number,
+    private readonly signalPeriod: number) {
+    this.fast = new RunningEma(fastPeriod);
+    this.slow = new RunningEma(slowPeriod);
+    this.signal = new RunningEma(signalPeriod);
+  }
+
+  update(close: number): void {
+    const fast = this.fast.update(close), slow = this.slow.update(close);
+    if (fast === null || slow === null) return;
+    const line = fast - slow, signal = this.signal.update(line);
+    if (signal !== null) this.value = { macd: line, signal, histogram: line - signal };
+  }
+
+  current(): MacdValue | null { return this.value; }
+
+  copy(): RunningMacd {
+    const copy = new RunningMacd(this.fastPeriod, this.slowPeriod, this.signalPeriod);
+    copy.fast = this.fast.copy(); copy.slow = this.slow.copy(); copy.signal = this.signal.copy();
+    copy.value = this.value === null ? null : { ...this.value };
+    return copy;
+  }
 }
 
 /** MACD line, signal line and histogram at the latest candle. */
